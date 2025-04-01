@@ -15,6 +15,7 @@ mod file;
 mod outputs;
 mod results;
 mod rules;
+mod indexers;
 
 ///
 /// A static analyser for your PHP project.

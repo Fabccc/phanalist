@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::file::File;
+use crate::indexers::Indexers;
 use crate::results::Violation;
 use crate::rules::ast_child_statements::AstChildStatements;
 
@@ -21,6 +22,7 @@ pub mod e10;
 pub mod e11;
 pub mod e12;
 pub mod e13;
+pub mod e14;
 pub mod e2;
 pub mod e3;
 pub mod e4;
@@ -85,6 +87,15 @@ pub trait Rule {
     }
 
     fn validate(&self, file: &File, statement: &Statement) -> Vec<Violation>;
+
+    fn validate_with_indexed(
+        &self,
+        file: &File,
+        statement: &Statement,
+        indexers: &Indexers,
+    ) -> Vec<Violation> {
+        vec![]
+    }
 
     fn new_violation(&self, file: &File, suggestion: String, span: Span) -> Violation {
         let line = file.lines.get(span.line - 1).unwrap();
@@ -197,6 +208,7 @@ pub fn all_rules() -> HashMap<String, Box<dyn Rule>> {
     add_rule(&mut rules, Box::default() as Box<e11::Rule>);
     add_rule(&mut rules, Box::default() as Box<e12::Rule>);
     add_rule(&mut rules, Box::new(e13::Rule {}));
+    add_rule(&mut rules, Box::new(e14::Rule {}));
 
     rules
 }
@@ -207,8 +219,33 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::analyse::Analyse;
+    use crate::outputs::Format;
 
     use super::*;
+
+    pub(crate) fn analyse_folder_for_rule(
+        folder_path: &str,
+        file_path: &str,
+        rule_code: &str,
+    ) -> Vec<Violation> {
+        let config = Config {
+            enabled_rules: vec![rule_code.to_string()],
+            ..Default::default()
+        };
+        let analyse = Analyse::new(&config);
+
+        analyse
+            .scan(
+                format!("./src/rules/examples/{folder_path}"),
+                &config,
+                false,
+                &Format::text,
+            )
+            .files
+            .get(file_path)
+            .unwrap()
+            .clone()
+    }
 
     pub(crate) fn analyze_file_for_rule(path: &str, rule_code: &str) -> Vec<Violation> {
         let path = PathBuf::from(format!("./src/rules/examples/{path}"));
@@ -220,8 +257,17 @@ mod tests {
             ..Default::default()
         };
         let analyse = Analyse::new(&config);
+        let mut indexers = Indexers::new();
 
-        analyse.analyse_file(&mut file)
+        let mut violations = vec![];
+
+        violations.append(&mut analyse.analyse_file(&mut file));
+
+        indexers.index_file(&file);
+
+        violations.append(&mut analyse.analyze_indexed_file(&file, &indexers));
+
+        violations
     }
 
     fn get_ns() -> String {

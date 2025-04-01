@@ -6,16 +6,20 @@ use std::sync::mpsc::Sender;
 
 use colored::Colorize;
 use indicatif::ProgressBar;
+use jwalk::rayon::result;
 use jwalk::WalkDir;
 use php_parser_rs::parser;
 
 use crate::config::Config;
 use crate::file::File;
+use crate::indexers::method::MethodIndex;
+use crate::indexers::Indexer;
+use crate::indexers::Indexers;
 use crate::outputs::codeclimate::CodeClimate;
-use crate::outputs::Format;
 use crate::outputs::json::Json;
 use crate::outputs::sarif::Sarif;
 use crate::outputs::text::Text;
+use crate::outputs::Format;
 use crate::outputs::OutputFormatter;
 use crate::results::{Results, Violation};
 use crate::rules::Rule;
@@ -82,17 +86,30 @@ impl Analyse {
         });
 
         let mut files = 0;
+        let mut all_files = Vec::new();
+        let mut indexers = Indexers::new();
+
+        // first pass
         for (content, path) in recv {
             if show_bar && format == &Format::text {
                 progress_bar.inc(1);
             }
-
             let mut file = File::new(path, content);
             let violations = self.analyse_file(&mut file);
             results.add_file_violations(&file, violations);
+            all_files.push(file);
+            indexers.index_file(&all_files.last().unwrap());
 
             files += 1;
         }
+
+        // second pass with all file indexed and AST built for finer analysis
+        for file in all_files {
+            let violations = self.analyze_indexed_file(&file, &indexers);
+            results.add_file_violations(&file, violations);
+        }
+
+        // Progressing
 
         if show_bar && format == &Format::text {
             progress_bar.finish();
@@ -186,6 +203,16 @@ impl Analyse {
         violations
     }
 
+    pub(crate) fn analyze_indexed_file(&self, file: &File, indexers: &Indexers) -> Vec<Violation> {
+        let mut violations: Vec<Violation> = vec![];
+
+        for statement in &file.ast {
+            violations.append(&mut self.analyze_file_statemenet_indexed(file, statement, indexers));
+        }
+
+        violations
+    }
+
     fn get_active_rules(config: &Config) -> HashMap<String, Box<dyn Rule>> {
         let active_codes = Self::filter_active_codes(
             rules::all_rules().into_keys().collect(),
@@ -241,6 +268,25 @@ impl Analyse {
             if rule.do_validate(file) {
                 for statement in rule.flatten_statements_to_validate(statement) {
                     violations.append(&mut rule.validate(file, statement));
+                }
+            }
+        }
+
+        violations
+    }
+
+    pub fn analyze_file_statemenet_indexed(
+        &self,
+        file: &File,
+        statement: &parser::ast::Statement,
+        indexers: &Indexers,
+    ) -> Vec<Violation> {
+        let mut violations = Vec::new();
+
+        for rule in self.rules.values() {
+            if rule.do_validate(file) {
+                for statement in rule.flatten_statements_to_validate(statement) {
+                    violations.append(&mut rule.validate_with_indexed(file, statement, indexers));
                 }
             }
         }
