@@ -6,6 +6,7 @@ mod file;
 mod outputs;
 mod results;
 mod rules;
+mod ast;
 
 pub fn scan(path: String) -> results::Results {
     let output_format = Format::json;

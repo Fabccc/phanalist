@@ -5,11 +5,16 @@ use std::process;
 use std::str::FromStr;
 
 use clap::{arg, Parser};
+use mago_interner::ThreadedInterner;
+use mago_php_version::PHPVersion;
+use mago_source::SourceManager;
+use php_parser_rs::printer::print;
 
 use crate::analyse::Analyse;
 use crate::outputs::Format;
 
 mod analyse;
+mod ast;
 mod config;
 mod file;
 mod outputs;
@@ -60,6 +65,32 @@ fn main() {
             process::exit(exitcode::USAGE);
         }
     };
+    let threaded_interner = ThreadedInterner::new();
+
+    let source_manager = match ast::load(&paths.first().unwrap(), &threaded_interner) {
+        Ok(source) => source,
+        Err(e) => {
+            println!("Error loading source: {}", e);
+            process::exit(exitcode::IOERR);
+        }
+    };
+
+    println!(
+        "Loaded {} source files from {}",
+        source_manager.len(),
+        paths.first().unwrap()
+    );
+
+    // TODO: Don't hardcore PHP version, either read from config or fallback to the environment variable (or opening a process)
+    let ast = match ast::build_ast(&threaded_interner, &source_manager, PHPVersion::PHP84) {
+        Ok(ast) => ast,
+        Err(e) => {
+            println!("Error building AST: {}", e);
+            process::exit(exitcode::SOFTWARE);
+        }
+    };
+
+    println!("Built AST with {} files", ast.tree.len());
 
     let mut config = Analyse::parse_config(args.config, &format, quiet);
     if let Some(rules) = args.rules {
